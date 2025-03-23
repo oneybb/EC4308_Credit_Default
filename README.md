@@ -1,1 +1,2 @@
-# EC4308_Credit_Default
+# Credit Default Prediction
+
