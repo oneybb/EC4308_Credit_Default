@@ -1,4 +1,4 @@
-# Credit Card Default Prediction Analysis - Improved Version
+# Baseline Model Analysis 
 print("running...")
 import pandas as pd
 import numpy as np
@@ -7,7 +7,7 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, roc_curve, precision_recall_curve, average_precision_score
+from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, roc_curve, precision_recall_curve, average_precision_score, f1_score
 from sklearn.feature_selection import SequentialFeatureSelector, SelectFromModel, RFE
 import joblib
 import os
@@ -442,6 +442,34 @@ best_auc = best_model_metrics['ROC-AUC']
 
 print(f"\n==== Best Model: {best_model_name} with ROC-AUC {best_auc:.4f} ====")
 
+def find_optimal_threshold(y_true, y_pred_proba):
+    """Find the probability threshold that maximizes F1 score"""
+    thresholds = np.arange(0.1, 1.0, 0.01)
+    f1_scores = []
+    
+    for threshold in thresholds:
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        f1 = f1_score(y_true, y_pred)
+        f1_scores.append(f1)
+    
+    optimal_threshold = thresholds[np.argmax(f1_scores)]
+    max_f1 = max(f1_scores)
+    
+    # Plot F1 scores vs thresholds
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, f1_scores)
+    plt.axvline(x=optimal_threshold, color='r', linestyle='--', 
+                label=f'Optimal threshold = {optimal_threshold:.2f}')
+    plt.xlabel('Threshold')
+    plt.ylabel('F1 Score')
+    plt.title('F1 Score vs Classification Threshold')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(results_dir, 'f1_vs_threshold.png'))
+    plt.close()
+    
+    return optimal_threshold, max_f1
+
 # ==== Final Evaluation on Test Set ====
 print("\n==== Final Evaluation on Test Set ====")
 
@@ -453,14 +481,47 @@ if best_model_name.startswith('Forward Selection'):
 elif best_model_name.startswith('Backward Selection'):
     selected_features = best_backward_features
 
-# For the best model, evaluate on the test set
+# For the best model, evaluate on both validation and test sets
 if selected_features is not None:
     print(f"\nUsing {len(selected_features)} selected features for final evaluation")
-    results = evaluate_model(best_model, X_train, y_train, X_test, y_test, f"{best_model_name} (Test)", selected_features)
+    X_val_use = X_val[selected_features]
+    X_test_use = X_test[selected_features]
 else:
-    results = evaluate_model(best_model, X_train, y_train, X_test, y_test, f"{best_model_name} (Test)")
+    X_val_use = X_val
+    X_test_use = X_test
 
-# Save the best model
-joblib.dump(best_model, os.path.join(results_dir, 'best_model.pkl'))
+# Fit the model on training data
+best_model.fit(X_train if selected_features is None else X_train[selected_features], y_train)
+
+# Get predictions on validation set
+val_pred_proba = best_model.predict_proba(X_val_use)[:, 1]
+val_roc_auc = roc_auc_score(y_val, val_pred_proba)
+
+# Find optimal threshold using validation set
+print("\nFinding optimal threshold using validation set...")
+optimal_threshold, val_max_f1 = find_optimal_threshold(y_val, val_pred_proba)
+print(f"Optimal threshold: {optimal_threshold:.3f}")
+print(f"Validation ROC-AUC: {val_roc_auc:.3f}")
+print(f"Validation F1-score at optimal threshold: {val_max_f1:.3f}")
+
+# Apply to test set
+test_pred_proba = best_model.predict_proba(X_test_use)[:, 1]
+test_pred = (test_pred_proba >= optimal_threshold).astype(int)
+test_roc_auc = roc_auc_score(y_test, test_pred_proba)
+test_f1 = f1_score(y_test, test_pred)
+
+print("\nTest Set Performance:")
+print(f"Test ROC-AUC: {test_roc_auc:.3f}")
+print(f"Test F1-score at optimal threshold: {test_f1:.3f}")
+
+print("\nClassification Report at Optimal Threshold:")
+print(classification_report(y_test, test_pred))
+
+# Save the best model and optimal threshold
+joblib.dump({
+    'model': best_model,
+    'optimal_threshold': optimal_threshold,
+    'selected_features': selected_features
+}, os.path.join(results_dir, 'best_model.pkl'))
 
 print(f"\nAnalysis complete. Results and visualizations have been saved to the '{results_dir}' directory.") 
